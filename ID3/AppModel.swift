@@ -111,7 +111,7 @@ struct EditorTab: Identifiable, Hashable {
         guard let workspace = workspace else {
             return url.deletingLastPathComponent().path
         }
-        let rootPath = workspace.path.hasSuffix("/") ? workspace.path : workspace.path + "/"
+        let rootPath = workspace.resolvingSymlinksInPath().path.hasSuffix("/") ? workspace.resolvingSymlinksInPath().path : workspace.resolvingSymlinksInPath().path + "/"
         let trimmed = url.path.replacingOccurrences(of: rootPath, with: "")
         let components = trimmed.split(separator: "/").dropLast()
         return components.isEmpty ? workspace.lastPathComponent : components.joined(separator: "/")
@@ -131,6 +131,9 @@ final class AppModel: NSObject, ObservableObject {
     @Published var recentWorkspaces: [URL] = []
 
     private let recentWorkspacesKey = "recentWorkspaces"
+    private let recentBookmarksKey = "recentWorkspaceBookmarks"
+    private var recentWorkspaceBookmarks: [String: Data] = [:]
+    private var activeSecurityScopedURL: URL?
 
     var activeTab: EditorTab? {
         guard let activeTabID else { return nil }
@@ -145,6 +148,9 @@ final class AppModel: NSObject, ObservableObject {
         super.init()
         if let saved = UserDefaults.standard.array(forKey: recentWorkspacesKey) as? [String] {
             recentWorkspaces = saved.compactMap { URL(fileURLWithPath: $0) }
+        }
+        if let bookmarkDict = UserDefaults.standard.dictionary(forKey: recentBookmarksKey) as? [String: Data] {
+            recentWorkspaceBookmarks = bookmarkDict
         }
     }
 
@@ -162,11 +168,20 @@ final class AppModel: NSObject, ObservableObject {
 
     @MainActor
     func openRecentWorkspace(_ url: URL) {
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            state = .error("Folder not found at \(url.path)")
-            recentWorkspaces.removeAll { $0 == url }
-            let paths = recentWorkspaces.map { $0.path }
-            UserDefaults.standard.set(paths, forKey: recentWorkspacesKey)
+        let path = url.path
+        if let bookmark = recentWorkspaceBookmarks[path] {
+            var stale = false
+            if let resolved = try? URL(resolvingBookmarkData: bookmark, options: [.withSecurityScope], relativeTo: nil, bookmarkDataIsStale: &stale) {
+                beginSecurityScopeIfNeeded(for: resolved)
+                prepareWorkspace(at: resolved)
+                if stale { recordRecentWorkspace(resolved) }
+                return
+            }
+        }
+
+        guard FileManager.default.fileExists(atPath: path) else {
+            state = .error("Folder not found at \(path)")
+            removeRecentWorkspace(atPath: path)
             return
         }
         prepareWorkspace(at: url)
@@ -311,6 +326,7 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func prepareWorkspace(at url: URL) {
+        beginSecurityScopeIfNeeded(for: url)
         workspaceURL = url
         UserDefaults.standard.set(url, forKey: "lastWorkspace")
         recordRecentWorkspace(url)
@@ -319,14 +335,13 @@ final class AppModel: NSObject, ObservableObject {
         activeTabID = nil
         tabs.removeAll()
         rebuildFileTree()
-        openFirstFileIfAvailable()
+        DispatchQueue.main.async { [weak self] in
+            self?.openFirstFileIfAvailable()
+        }
 
         switch editorMode {
         case .native:
             state = .ready
-            if selectedFileURL == nil {
-                openFirstFileIfAvailable()
-            }
         case .workbench:
             reloadWorkbench()
         }
@@ -338,8 +353,10 @@ final class AppModel: NSObject, ObservableObject {
         if recentWorkspaces.count > 10 {
             recentWorkspaces = Array(recentWorkspaces.prefix(10))
         }
-        let paths = recentWorkspaces.map { $0.path }
-        UserDefaults.standard.set(paths, forKey: recentWorkspacesKey)
+        if let bookmark = try? url.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil) {
+            recentWorkspaceBookmarks[url.path] = bookmark
+        }
+        trimBookmarkStore()
     }
 
     private func rebuildFileTree() {
@@ -368,10 +385,35 @@ final class AppModel: NSObject, ObservableObject {
         return nil
     }
 
-    private func buildNodes(at url: URL, depth: Int = 0) -> [WorkspaceNode] {
-        let maxDepth = 6
-        guard depth <= maxDepth else { return [] }
+    private func trimBookmarkStore() {
+        let paths = recentWorkspaces.map { $0.path }
+        UserDefaults.standard.set(paths, forKey: recentWorkspacesKey)
+        recentWorkspaceBookmarks = recentWorkspaceBookmarks.filter { paths.contains($0.key) }
+        UserDefaults.standard.set(recentWorkspaceBookmarks, forKey: recentBookmarksKey)
+    }
 
+    private func removeRecentWorkspace(atPath path: String) {
+        recentWorkspaces.removeAll { $0.path == path }
+        recentWorkspaceBookmarks.removeValue(forKey: path)
+        trimBookmarkStore()
+    }
+
+    private func beginSecurityScopeIfNeeded(for url: URL) {
+        if activeSecurityScopedURL == url { return }
+        endSecurityScopeIfNeeded()
+        if url.startAccessingSecurityScopedResource() {
+            activeSecurityScopedURL = url
+        }
+    }
+
+    private func endSecurityScopeIfNeeded() {
+        if let scoped = activeSecurityScopedURL {
+            scoped.stopAccessingSecurityScopedResource()
+            activeSecurityScopedURL = nil
+        }
+    }
+
+    private func buildNodes(at url: URL) -> [WorkspaceNode] {
         guard let contents = try? FileManager.default.contentsOfDirectory(
             at: url,
             includingPropertiesForKeys: [.isDirectoryKey],
@@ -391,7 +433,7 @@ final class AppModel: NSObject, ObservableObject {
 
         return sorted.map { item in
             let isDir = item.hasDirectoryFlag
-            let children = isDir ? buildNodes(at: item, depth: depth + 1) : nil
+            let children = isDir ? buildNodes(at: item) : nil
             return WorkspaceNode(url: item, isDirectory: isDir, children: children)
         }
     }
@@ -426,5 +468,14 @@ private extension URL {
         var isDirectory: ObjCBool = false
         FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory)
         return isDirectory.boolValue
+    }
+}
+
+extension AppModel {
+    @MainActor
+    func clearRecentWorkspaces() {
+        recentWorkspaces.removeAll()
+        recentWorkspaceBookmarks.removeAll()
+        trimBookmarkStore()
     }
 }

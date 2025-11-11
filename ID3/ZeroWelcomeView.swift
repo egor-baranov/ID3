@@ -30,9 +30,17 @@ struct ZeroWelcomeView: View {
                         .font(.subheadline.weight(.medium))
                     Spacer()
                     if !appModel.recentWorkspaces.isEmpty {
-                        Text("View all (\(appModel.recentWorkspaces.count))")
+                        HStack(spacing: 12) {
+                            Text("View all (\(appModel.recentWorkspaces.count))")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                            Button("Clear") {
+                                Task { await appModel.clearRecentWorkspaces() }
+                            }
                             .font(.footnote)
                             .foregroundStyle(.secondary)
+                            .buttonStyle(.plain)
+                        }
                     }
                 }
 
@@ -43,7 +51,7 @@ struct ZeroWelcomeView: View {
                 } else {
                     VStack(spacing: 12) {
                         ForEach(recentItems, id: \.self) { url in
-                            RecentRow(name: url.lastPathComponent, path: url.deletingLastPathComponent().path) {
+                            RecentRow(name: url.lastPathComponent, path: displayPath(for: url)) {
                                 appModel.openRecentWorkspace(url)
                             }
                         }
@@ -68,6 +76,15 @@ struct ZeroWelcomeView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.ideEditorBackground)
     }
+}
+
+private func displayPath(for url: URL) -> String {
+    let path = url.path
+    let home = NSHomeDirectory()
+    if path.hasPrefix(home) {
+        return path.replacingOccurrences(of: home, with: "~")
+    }
+    return path
 }
 
 private struct ActionTile: View {
