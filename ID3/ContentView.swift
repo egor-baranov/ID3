@@ -20,7 +20,7 @@ struct ContentView: View {
                     .frame(maxHeight: .infinity)
                     .background(Color.ideSidebar)
                     .overlay(alignment: .trailing) {
-                        ResizeHandle()
+                        DragHandle(edge: .trailing)
                             .gesture(
                                 DragGesture(minimumDistance: 0)
                                     .onChanged { value in
@@ -52,14 +52,14 @@ struct ContentView: View {
             .background(Color.ideBackground)
 
             if showChatSidebar {
-                Divider()
                 ChatSidebar(
                     messages: $chatMessages,
                     closeAction: { showChatSidebar = false }
                 )
                     .frame(width: chatWidth)
+                    .background(Color.ideSidebar)
                     .overlay(alignment: .leading) {
-                        ResizeHandle()
+                        DragHandle()
                             .gesture(
                                 DragGesture(minimumDistance: 0)
                                     .onChanged { value in
@@ -153,22 +153,28 @@ private struct EditorToolbar: View {
     }
 }
 
-private struct ResizeHandle: View {
+private func clamp(_ value: CGFloat, min: CGFloat, max: CGFloat) -> CGFloat {
+    Swift.min(Swift.max(value, min), max)
+}
+
+private struct DragHandle: View {
+    enum Edge {
+        case leading, trailing
+    }
+
+    var edge: Edge = .leading
+
     var body: some View {
-        ZStack {
-            Rectangle()
-                .fill(Color.primary.opacity(0.05))
-                .frame(width: 1)
+        ZStack(alignment: edge == .leading ? .leading : .trailing) {
             Rectangle()
                 .fill(Color.clear)
-                .frame(width: 8)
+                .frame(width: 10)
+            Rectangle()
+                .fill(Color.primary.opacity(0.08))
+                .frame(width: 1)
         }
         .contentShape(Rectangle())
     }
-}
-
-private func clamp(_ value: CGFloat, min: CGFloat, max: CGFloat) -> CGFloat {
-    Swift.min(Swift.max(value, min), max)
 }
 
 

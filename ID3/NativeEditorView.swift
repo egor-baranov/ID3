@@ -17,10 +17,11 @@ struct NativeEditorView: View {
     }
 
     var body: some View {
-        CodeTextView(
+        MonacoEditorView(
             text: textBinding,
             language: language,
-            theme: theme
+            theme: theme,
+            onTextChange: { _ in }
         )
         .background(Color.ideEditorBackground)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
