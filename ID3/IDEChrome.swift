@@ -361,7 +361,7 @@ struct StartTabView: View {
                 Spacer()
             }
             .padding(.horizontal, 60)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(maxWidth: .infinity, maxHeight: .infinity) 
         }
     }
 }

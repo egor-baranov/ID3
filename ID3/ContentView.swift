@@ -53,13 +53,7 @@ struct ContentView: View {
         }
 
         ToolbarItem(placement: .navigation) {
-            if let projectName = currentProjectName {
-                Text(projectName)
-                    .font(.system(size: 15, weight: .regular))
-                    .padding(.leading, 6)
-            } else {
-                EmptyView()
-            }
+            WorkspacePickerButton(currentProjectName: currentProjectName)
         }
 
         ToolbarItem(placement: .principal) {
@@ -87,7 +81,7 @@ struct ContentView: View {
         }
     }
 
-    private var commandBarWidthEstimate: CGFloat? {
+private var commandBarWidthEstimate: CGFloat? {
         guard contentWidth > 0 else { return nil }
         let reserved = sidebarButtonWidth + chatButtonWidth + toolbarSpacingAllowance
         let available = contentWidth - reserved
@@ -142,6 +136,125 @@ struct ContentView: View {
 
     private var currentProjectName: String? {
         appModel.workspaceURL?.lastPathComponent
+    }
+
+    private struct WorkspacePickerButton: View {
+        @EnvironmentObject private var appModel: AppModel
+        let currentProjectName: String?
+        @State private var showMenu = false
+        @State private var hovered = false
+
+        var body: some View {
+            Button(action: { showMenu.toggle() }) {
+                HStack(spacing: 4) {
+                    Text(currentProjectName ?? "Select Project")
+                        .font(.system(size: 14, weight: .semibold))
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(Color.primary.opacity(hovered ? 0.12 : 0))
+                )
+            }
+            .buttonStyle(.plain)
+            .onHover { hovered = $0 }
+            .popover(isPresented: $showMenu, arrowEdge: .bottom) {
+                WorkspaceMenuContent(
+                    currentWorkspace: appModel.workspaceURL,
+                    recentWorkspaces: appModel.recentWorkspaces,
+                    openFolder: {
+                        showMenu = false
+                        DispatchQueue.main.async {
+                            appModel.presentWorkspacePicker()
+                        }
+                    },
+                    openWorkspace: { url in
+                        showMenu = false
+                        DispatchQueue.main.async {
+                            appModel.openRecentWorkspace(url)
+                        }
+                    }
+                )
+                .frame(width: 320)
+                .padding(.vertical, 8)
+            }
+        }
+    }
+
+    private struct WorkspaceMenuContent: View {
+        let currentWorkspace: URL?
+        let recentWorkspaces: [URL]
+        let openFolder: () -> Void
+        let openWorkspace: (URL) -> Void
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 12) {
+                Button(action: openFolder) {
+                    Label("Open Folder…", systemImage: "folder")
+                        .font(.system(size: 13, weight: .semibold))
+                }
+                .buttonStyle(.plain)
+
+                if let currentWorkspace {
+                    SectionHeader("Open Project")
+                    Button {
+                        openWorkspace(currentWorkspace)
+                    } label: {
+                        WorkspaceMenuRow(name: currentWorkspace.lastPathComponent, path: currentWorkspace.path)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                if !recentWorkspaces.isEmpty {
+                    SectionHeader("Recent Projects")
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(recentWorkspaces, id: \.self) { url in
+                            Button {
+                                openWorkspace(url)
+                            } label: {
+                                WorkspaceMenuRow(name: url.lastPathComponent, path: url.path)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+        }
+    }
+
+    private struct SectionHeader: View {
+        let title: String
+
+        init(_ title: String) {
+            self.title = title
+        }
+
+        var body: some View {
+            Text(title.uppercased())
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .padding(.top, 4)
+        }
+    }
+
+    private struct WorkspaceMenuRow: View {
+        let name: String
+        let path: String
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(name)
+                    .font(.system(size: 13, weight: .semibold))
+                Text(path)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 
     private var mainWorkspaceView: some View {
