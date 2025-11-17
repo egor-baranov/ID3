@@ -268,12 +268,22 @@ private var commandBarWidthEstimate: CGFloat? {
         let liveSidebarWidth = clamp(sidebarWidth + sidebarDragOffset, min: 200, max: 520)
         let liveChatWidth = clamp(chatWidth + chatDragOffset, min: 240, max: 520)
 
+        let cornerRadius: CGFloat = 12
+
         return HStack(spacing: 0) {
             if showSidebar {
                 WorkspaceSidebar()
                     .frame(width: liveSidebarWidth)
                     .frame(maxHeight: .infinity)
-                    .background(Color.ideSidebar)
+                    .background(
+                        RoundedCorner(radius: cornerRadius, corners: [.topRight])
+                            .fill(Color.ideSidebar)
+                    )
+                    .overlay(
+                        RoundedCorner(radius: cornerRadius, corners: [.topRight])
+                            .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                    )
+                    .clipShape(RoundedCorner(radius: cornerRadius, corners: [.topRight]))
                     .overlay(alignment: .trailing) {
                         DragHandle(edge: .trailing)
                             .gesture(
@@ -300,7 +310,15 @@ private var commandBarWidthEstimate: CGFloat? {
                     closeAction: { showChatSidebar = false }
                 )
                     .frame(width: liveChatWidth)
-                    .background(Color.ideSidebar)
+                    .background(
+                        RoundedCorner(radius: cornerRadius, corners: [.topLeft])
+                            .fill(Color.ideSidebar)
+                    )
+                    .overlay(
+                        RoundedCorner(radius: cornerRadius, corners: [.topLeft])
+                            .stroke(Color.primary.opacity(0.08), lineWidth: 1)
+                    )
+                    .clipShape(RoundedCorner(radius: cornerRadius, corners: [.topLeft]))
                     .overlay(alignment: .leading) {
                         DragHandle()
                             .gesture(
@@ -317,6 +335,7 @@ private var commandBarWidthEstimate: CGFloat? {
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
+        .background(Color.ideBackground)
     }
 
     private func toggleChat() {
@@ -342,11 +361,85 @@ private struct DragHandle: View {
             Rectangle()
                 .fill(Color.clear)
                 .frame(width: 10)
-            Rectangle()
-                .fill(Color.primary.opacity(0.08))
-                .frame(width: 1)
+            VStack {
+                Spacer().frame(height: 32)
+                Rectangle()
+                    .fill(Color.primary.opacity(0.08))
+                    .frame(width: 1)
+                Spacer()
+            }
         }
         .contentShape(Rectangle())
+    }
+}
+
+struct RoundedCorner: Shape {
+    struct Corner: OptionSet {
+        let rawValue: Int
+        static let topLeft = Corner(rawValue: 1 << 0)
+        static let topRight = Corner(rawValue: 1 << 1)
+        static let bottomLeft = Corner(rawValue: 1 << 2)
+        static let bottomRight = Corner(rawValue: 1 << 3)
+        static let allCorners: Corner = [.topLeft, .topRight, .bottomLeft, .bottomRight]
+    }
+
+    var radius: CGFloat = 8
+    var corners: Corner = .allCorners
+
+    func path(in rect: CGRect) -> Path {
+        let tl = corners.contains(.topLeft) ? radius : 0
+        let tr = corners.contains(.topRight) ? radius : 0
+        let bl = corners.contains(.bottomLeft) ? radius : 0
+        let br = corners.contains(.bottomRight) ? radius : 0
+
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX + tl, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX - tr, y: rect.minY))
+        if tr > 0 {
+            path.addArc(center: CGPoint(x: rect.maxX - tr, y: rect.minY + tr),
+                        radius: tr,
+                        startAngle: .degrees(-90),
+                        endAngle: .degrees(0),
+                        clockwise: false)
+        } else {
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        }
+
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - br))
+        if br > 0 {
+            path.addArc(center: CGPoint(x: rect.maxX - br, y: rect.maxY - br),
+                        radius: br,
+                        startAngle: .degrees(0),
+                        endAngle: .degrees(90),
+                        clockwise: false)
+        } else {
+            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        }
+
+        path.addLine(to: CGPoint(x: rect.minX + bl, y: rect.maxY))
+        if bl > 0 {
+            path.addArc(center: CGPoint(x: rect.minX + bl, y: rect.maxY - bl),
+                        radius: bl,
+                        startAngle: .degrees(90),
+                        endAngle: .degrees(180),
+                        clockwise: false)
+        } else {
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+        }
+
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + tl))
+        if tl > 0 {
+            path.addArc(center: CGPoint(x: rect.minX + tl, y: rect.minY + tl),
+                        radius: tl,
+                        startAngle: .degrees(180),
+                        endAngle: .degrees(270),
+                        clockwise: false)
+        } else {
+            path.addLine(to: CGPoint(x: rect.minX, y: rect.minY))
+        }
+
+        path.closeSubpath()
+        return path
     }
 }
 
