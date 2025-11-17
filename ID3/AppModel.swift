@@ -270,7 +270,6 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     private func createPane(after referencePaneID: EditorPane.ID?) -> EditorPane {
-        let newPane = EditorPane()
         let insertIndex: Int
         if let referencePaneID,
            let referenceIndex = panes.firstIndex(where: { $0.id == referencePaneID }) {
@@ -278,8 +277,25 @@ final class AppModel: NSObject, ObservableObject {
         } else {
             insertIndex = panes.count
         }
-        panes.insert(newPane, at: insertIndex)
-        return newPane
+        return createPane(insertingAt: insertIndex)
+    }
+
+    private func createPane(before referencePaneID: EditorPane.ID?) -> EditorPane {
+        let insertIndex: Int
+        if let referencePaneID,
+           let referenceIndex = panes.firstIndex(where: { $0.id == referencePaneID }) {
+            insertIndex = referenceIndex
+        } else {
+            insertIndex = 0
+        }
+        return createPane(insertingAt: insertIndex)
+    }
+
+    private func createPane(insertingAt index: Int) -> EditorPane {
+        let pane = EditorPane()
+        let clamped = max(0, min(index, panes.count))
+        panes.insert(pane, at: clamped)
+        return pane
     }
 
     override init() {
@@ -640,6 +656,12 @@ final class AppModel: NSObject, ObservableObject {
 
     func handleDropIntoNewPane(_ providers: [NSItemProvider], after referencePane: EditorPane?) -> Bool {
         let newPane = createPane(after: referencePane?.id)
+        activePaneID = newPane.id
+        return handleDrop(providers, into: newPane)
+    }
+
+    func handleDropIntoNewPaneBefore(_ providers: [NSItemProvider], before referencePane: EditorPane?) -> Bool {
+        let newPane = createPane(before: referencePane?.id)
         activePaneID = newPane.id
         return handleDrop(providers, into: newPane)
     }

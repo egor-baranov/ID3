@@ -433,7 +433,8 @@ private struct PaneContainer: View {
     @EnvironmentObject private var appModel: AppModel
     let pane: EditorPane
     @State private var isPaneTarget = false
-    @State private var isSplitTarget = false
+    @State private var isSplitLeftTarget = false
+    @State private var isSplitRightTarget = false
     private let dropTypes: [UTType] = [.plainText, .fileURL, .url]
 
     var body: some View {
@@ -453,23 +454,25 @@ private struct PaneContainer: View {
                         .animation(.easeInOut(duration: 0.2), value: isPaneTarget)
 
                     HStack(spacing: 0) {
-                        Color.clear
-                            .frame(width: geo.size.width * 0.6)
-                            .allowsHitTesting(false)
+                        splitZone(width: geo.size.width * 0.3,
+                                  isTargeted: $isSplitLeftTarget,
+                                  action: { providers in
+                                      appModel.handleDropIntoNewPaneBefore(providers, before: pane)
+                                  })
 
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .stroke(Color.ideAccent, lineWidth: 2)
-                                .padding(.vertical, 6)
-                                .opacity(isSplitTarget ? 0.6 : 0)
-                                .animation(.easeInOut(duration: 0.2), value: isSplitTarget)
-                        }
-                        .frame(width: geo.size.width * 0.4)
-                        .contentShape(Rectangle())
-                        .allowsHitTesting(isSplitTarget)
-                        .onDrop(of: dropTypes, isTargeted: $isSplitTarget) { providers in
-                            appModel.handleDropIntoNewPane(providers, after: pane)
-                        }
+                        Rectangle()
+                            .fill(Color.clear)
+                            .frame(width: geo.size.width * 0.4)
+                            .contentShape(Rectangle())
+                            .onDrop(of: dropTypes, isTargeted: $isPaneTarget) { providers in
+                                appModel.handleDrop(providers, into: pane)
+                            }
+
+                        splitZone(width: geo.size.width * 0.3,
+                                  isTargeted: $isSplitRightTarget,
+                                  action: { providers in
+                                      appModel.handleDropIntoNewPane(providers, after: pane)
+                                  })
                     }
                 }
             }
@@ -483,6 +486,22 @@ private struct PaneContainer: View {
                 appModel.activePaneID = pane.id
             }
         )
+    }
+
+    private func splitZone(width: CGFloat,
+                           isTargeted: Binding<Bool>,
+                           action: @escaping ([NSItemProvider]) -> Bool) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.ideAccent, lineWidth: 2)
+                .padding(.vertical, 6)
+                .opacity(isTargeted.wrappedValue ? 0.6 : 0)
+                .animation(.easeInOut(duration: 0.2), value: isTargeted.wrappedValue)
+        }
+        .frame(width: width)
+        .contentShape(Rectangle())
+        .allowsHitTesting(isTargeted.wrappedValue)
+        .onDrop(of: dropTypes, isTargeted: isTargeted, perform: action)
     }
 }
 
