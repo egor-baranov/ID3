@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @EnvironmentObject private var appModel: AppModel
@@ -417,18 +418,64 @@ private struct EditorWorkspaceView: View {
     var body: some View {
         HStack(spacing: 0) {
             ForEach(appModel.panes) { pane in
-                VStack(spacing: 0) {
-                    EditorTabBar(pane: pane)
-                    Divider()
-                    EditorSurface(pane: pane)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                PaneContainer(pane: pane)
 
                 if pane.id != appModel.panes.last?.id {
                     Divider()
                         .frame(maxHeight: .infinity)
                 }
             }
+        }
+    }
+}
+
+private struct PaneContainer: View {
+    @EnvironmentObject private var appModel: AppModel
+    let pane: EditorPane
+    @State private var isPaneTarget = false
+    @State private var isSplitTarget = false
+    private let dropTypes: [UTType] = [.plainText, .fileURL, .url]
+
+    var body: some View {
+        VStack(spacing: 0) {
+            EditorTabBar(pane: pane)
+            Divider()
+            EditorSurface(pane: pane)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(
+            GeometryReader { geo in
+                ZStack {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(Color.ideAccent, lineWidth: 2)
+                        .padding(3)
+                        .opacity(isPaneTarget ? 0.4 : 0)
+                        .animation(.easeInOut(duration: 0.2), value: isPaneTarget)
+
+                    HStack(spacing: 0) {
+                        Color.clear
+                            .frame(width: geo.size.width * 0.6)
+                            .allowsHitTesting(false)
+
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .stroke(Color.ideAccent, lineWidth: 2)
+                                .padding(.vertical, 6)
+                                .opacity(isSplitTarget ? 0.6 : 0)
+                                .animation(.easeInOut(duration: 0.2), value: isSplitTarget)
+                        }
+                        .frame(width: geo.size.width * 0.4)
+                        .contentShape(Rectangle())
+                        .onDrop(of: dropTypes, isTargeted: $isSplitTarget) { providers in
+                            appModel.handleDropIntoNewPane(providers, after: pane)
+                        }
+                    }
+                }
+            }
+        )
+        .contentShape(Rectangle())
+        .onDrop(of: dropTypes, isTargeted: $isPaneTarget) { providers in
+            appModel.handleDrop(providers, into: pane)
         }
     }
 }

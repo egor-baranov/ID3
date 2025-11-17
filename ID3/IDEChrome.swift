@@ -107,7 +107,7 @@ struct EditorTabBar: View {
                 .animation(.easeInOut(duration: 0.2), value: isDropTarget)
         }
         .onDrop(of: [UTType.plainText, .fileURL, .url], isTargeted: $isDropTarget) { providers in
-            handleDrop(providers, into: pane)
+            appModel.handleDrop(providers, into: pane)
         }
     }
 }
@@ -482,31 +482,7 @@ private extension EditorTabBar {
     }
 
     func handleDrop(_ providers: [NSItemProvider], into pane: EditorPane) -> Bool {
-        if let fileProvider = providers.first(where: {
-            $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
-            || $0.hasItemConformingToTypeIdentifier(UTType.url.identifier)
-        }) {
-            fileProvider.loadObject(ofClass: NSURL.self) { object, _ in
-                guard let url = (object as? NSURL) as URL? ?? object as? URL else { return }
-                DispatchQueue.main.async {
-                    appModel.openFile(at: url, inPane: pane.id)
-                }
-            }
-            return true
-        }
-
-        if let provider = providers.first(where: { $0.canLoadObject(ofClass: NSString.self) }) {
-            provider.loadObject(ofClass: NSString.self) { object, _ in
-                guard let nsString = object as? NSString else { return }
-                let identifier = nsString as String
-                DispatchQueue.main.async {
-                    appModel.moveTab(withIdentifier: identifier, toPane: pane.id)
-                }
-            }
-            return true
-        }
-
-        return false
+        appModel.handleDrop(providers, into: pane)
     }
 }
 

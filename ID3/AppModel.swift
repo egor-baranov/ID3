@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 enum WorkbenchState: Equatable {
     case idle
@@ -268,6 +269,19 @@ final class AppModel: NSObject, ObservableObject {
             let newIndex = min(index, panes.count - 1)
             activePaneID = panes[newIndex].id
         }
+    }
+
+    private func createPane(after referencePaneID: EditorPane.ID?) -> EditorPane {
+        let newPane = EditorPane()
+        let insertIndex: Int
+        if let referencePaneID,
+           let referenceIndex = panes.firstIndex(where: { $0.id == referencePaneID }) {
+            insertIndex = referenceIndex + 1
+        } else {
+            insertIndex = panes.count
+        }
+        panes.insert(newPane, at: insertIndex)
+        return newPane
     }
 
     override init() {
@@ -605,6 +619,40 @@ final class AppModel: NSObject, ObservableObject {
 
         removePaneIfEmpty(at: location.paneIndex)
         activate(tab: tab)
+    }
+
+    func handleDrop(_ providers: [NSItemProvider], into pane: EditorPane) -> Bool {
+        if let fileProvider = providers.first(where: {
+            $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+            || $0.hasItemConformingToTypeIdentifier(UTType.url.identifier)
+        }) {
+            fileProvider.loadObject(ofClass: NSURL.self) { object, _ in
+                guard let url = (object as? NSURL) as URL? ?? object as? URL else { return }
+                DispatchQueue.main.async {
+                    self.openFile(at: url, inPane: pane.id)
+                }
+            }
+            return true
+        }
+
+        if let provider = providers.first(where: { $0.canLoadObject(ofClass: NSString.self) }) {
+            provider.loadObject(ofClass: NSString.self) { object, _ in
+                guard let nsString = object as? NSString else { return }
+                let identifier = nsString as String
+                DispatchQueue.main.async {
+                    self.moveTab(withIdentifier: identifier, toPane: pane.id)
+                }
+            }
+            return true
+        }
+
+        return false
+    }
+
+    func handleDropIntoNewPane(_ providers: [NSItemProvider], after referencePane: EditorPane?) -> Bool {
+        let newPane = createPane(after: referencePane?.id)
+        activePaneID = newPane.id
+        return handleDrop(providers, into: newPane)
     }
 
     func updateActiveDocumentText(_ text: String) {
