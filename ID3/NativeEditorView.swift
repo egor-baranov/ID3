@@ -3,15 +3,16 @@ import SwiftUI
 struct NativeEditorView: View {
     @EnvironmentObject private var appModel: AppModel
     @Environment(\.colorScheme) private var colorScheme
+    let tab: EditorTab
 
     private var theme: EditorTheme { EditorTheme(colorScheme: colorScheme) }
-    private var language: ProgrammingLanguage { ProgrammingLanguage(fileURL: appModel.selectedFileURL) }
+    private var language: ProgrammingLanguage { ProgrammingLanguage(fileURL: tab.fileURL) }
 
     private var textBinding: Binding<String> {
         Binding(
-            get: { appModel.activeDocumentText },
+            get: { appModel.documentText(for: tab) },
             set: { newValue in
-                appModel.updateActiveDocumentText(newValue)
+                appModel.updateDocumentText(newValue, for: tab)
             }
         )
     }
@@ -40,7 +41,7 @@ struct NativeEditorView: View {
     }
 
     private var previewType: PreviewType? {
-        guard let url = appModel.selectedFileURL else { return nil }
+        guard let url = tab.fileURL else { return nil }
         let ext = url.pathExtension.lowercased()
         if ImagePreviewSupport.supportsRaster(ext: ext) {
             return .raster(url)

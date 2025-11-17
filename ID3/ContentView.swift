@@ -132,7 +132,7 @@ private var commandBarWidthEstimate: CGFloat? {
         if let webURL = appModel.activeWebURL {
             return webURL.absoluteString
         }
-        if let fileURL = appModel.selectedFileURL {
+        if let fileURL = appModel.focusedFileURL {
             return fileURL.path
         }
         if let workspace = appModel.workspaceURL {
@@ -466,6 +466,7 @@ private struct PaneContainer: View {
                         }
                         .frame(width: geo.size.width * 0.4)
                         .contentShape(Rectangle())
+                        .allowsHitTesting(isSplitTarget)
                         .onDrop(of: dropTypes, isTargeted: $isSplitTarget) { providers in
                             appModel.handleDropIntoNewPane(providers, after: pane)
                         }
@@ -477,6 +478,11 @@ private struct PaneContainer: View {
         .onDrop(of: dropTypes, isTargeted: $isPaneTarget) { providers in
             appModel.handleDrop(providers, into: pane)
         }
+        .simultaneousGesture(
+            TapGesture().onEnded {
+                appModel.activePaneID = pane.id
+            }
+        )
     }
 }
 
@@ -556,8 +562,8 @@ private struct EditorSurface: View {
                         title: "No file selected",
                         message: "Pick a file from the sidebar to start editing."
                     )
-                } else {
-                    NativeEditorView()
+                } else if let tab = pane.activeTab {
+                    NativeEditorView(tab: tab)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
                 }

@@ -23,7 +23,7 @@ struct ID3App: App {
                     appModel.saveCurrentFile()
                 }
                 .keyboardShortcut("s", modifiers: [.command])
-                .disabled(appModel.editorMode != .native || appModel.selectedFileURL == nil)
+                .disabled(appModel.editorMode != .native || appModel.focusedFileURL == nil)
 
                 Button("Reload Workbench") {
                     appModel.reloadWorkbench()

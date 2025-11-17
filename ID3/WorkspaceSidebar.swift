@@ -150,7 +150,7 @@ private struct FileRow: View {
         let indentation: CGFloat
 
         var body: some View {
-            let isSelected = appModel.selectedFileURL == node.url
+            let isSelected = appModel.focusedFileURL == node.url
             let baseRow = HStack(spacing: 0) {
                 Color.clear.frame(width: indentation)
                 HStack(spacing: 6) {

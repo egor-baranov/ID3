@@ -163,7 +163,6 @@ final class AppModel: NSObject, ObservableObject {
     @Published var state: WorkbenchState = .idle
     @Published var editorMode: EditorMode = .native
     @Published var fileTree: [WorkspaceNode] = []
-    @Published var selectedFileURL: URL?
     @Published var panes: [EditorPane]
     @Published var activePaneID: EditorPane.ID
     @Published var recentWorkspaces: [URL] = []
@@ -190,9 +189,8 @@ final class AppModel: NSObject, ObservableObject {
         return nil
     }
 
-    var activeDocumentText: String {
-        guard let activeID = activeTabID else { return "" }
-        return tabContents[activeID] ?? ""
+    var focusedFileURL: URL? {
+        activePane?.activeTab?.fileURL
     }
 
     private var activePaneIndex: Int? {
@@ -388,7 +386,6 @@ final class AppModel: NSObject, ObservableObject {
         if let existingIndex = panes[paneIndex].tabs.firstIndex(of: prospectiveTab) {
             let existingTab = panes[paneIndex].tabs[existingIndex]
             panes[paneIndex].activeTabID = existingTab.id
-            selectedFileURL = url
             if tabContents[existingTab.id] == nil {
                 loadFileContents(for: existingTab, from: url)
             } else {
@@ -397,7 +394,6 @@ final class AppModel: NSObject, ObservableObject {
         } else {
             panes[paneIndex].tabs.append(prospectiveTab)
             panes[paneIndex].activeTabID = prospectiveTab.id
-            selectedFileURL = url
             loadFileContents(for: prospectiveTab, from: url)
         }
         activePaneID = panes[paneIndex].id
@@ -423,7 +419,6 @@ final class AppModel: NSObject, ObservableObject {
             panes[paneIndex].activeTabID = tab.id
         }
         activePaneID = panes[paneIndex].id
-        selectedFileURL = nil
         state = .ready
     }
 
@@ -471,17 +466,12 @@ final class AppModel: NSObject, ObservableObject {
 
         switch tab.kind {
         case .file(let url):
-            selectedFileURL = url
             if tabContents[tab.id] == nil {
                 loadFileContents(for: tab, from: url)
             } else {
                 state = .ready
             }
-        case .canvas:
-            selectedFileURL = nil
-            state = .ready
-        case .web:
-            selectedFileURL = nil
+        case .canvas, .web:
             state = .ready
         }
     }
@@ -529,7 +519,6 @@ final class AppModel: NSObject, ObservableObject {
             } else {
                 panes[paneIndex].activeTabID = nil
                 if activePaneID == panes[paneIndex].id {
-                    selectedFileURL = nil
                     state = workspaceURL == nil ? .idle : .ready
                 }
             }
@@ -655,19 +644,22 @@ final class AppModel: NSObject, ObservableObject {
         return handleDrop(providers, into: newPane)
     }
 
-    func updateActiveDocumentText(_ text: String) {
-        guard let activeID = activeTabID else { return }
-        tabContents[activeID] = text
+    func documentText(for tab: EditorTab) -> String {
+        tabContents[tab.id] ?? ""
+    }
+
+    func updateDocumentText(_ text: String, for tab: EditorTab) {
+        tabContents[tab.id] = text
         if editorMode == .native {
             state = .ready
         }
     }
 
     func saveCurrentFile() {
-        guard let url = selectedFileURL, let activeID = activeTabID else { return }
+        guard let tab = activeTab, let url = tab.fileURL else { return }
 
         do {
-            let text = tabContents[activeID] ?? ""
+            let text = tabContents[tab.id] ?? ""
             try text.write(to: url, atomically: true, encoding: .utf8)
             state = .ready
         } catch {
@@ -691,7 +683,6 @@ final class AppModel: NSObject, ObservableObject {
         workspaceURL = url
         UserDefaults.standard.set(url, forKey: "lastWorkspace")
         recordRecentWorkspace(url)
-        selectedFileURL = nil
         tabContents.removeAll()
         let pane = EditorPane()
         panes = [pane]
@@ -730,7 +721,7 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     private func openFirstFileIfAvailable() {
-        guard selectedFileURL == nil else { return }
+        guard focusedFileURL == nil else { return }
         if let url = firstFileURL(in: fileTree) {
             openFile(at: url)
         }
