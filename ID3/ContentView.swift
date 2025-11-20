@@ -114,18 +114,12 @@ private var commandBarWidthEstimate: CGFloat? {
 
     private var chatToolbarButton: some View {
         Button(action: toggleChat) {
-            Label("Chat", systemImage: "bubble.left.fill")
+            Label("Chat", systemImage: "bubble.left")
                 .labelStyle(.titleAndIcon)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .frame(minWidth: 80)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(showChatSidebar ? Color.ideAccent.opacity(0.2) : Color.secondary.opacity(0.15))
-                )
         }
-        .buttonStyle(.plain)
-        .padding(.vertical, 6)
+        .buttonStyle(.bordered)
+        .controlSize(.large)
+        .help(showChatSidebar ? "Hide Chat" : "Show Chat")
     }
 
     private var currentPath: String {
@@ -148,119 +142,32 @@ private var commandBarWidthEstimate: CGFloat? {
     private struct WorkspacePickerButton: View {
         @EnvironmentObject private var appModel: AppModel
         let currentProjectName: String?
-        @State private var showMenu = false
-        @State private var hovered = false
 
         var body: some View {
-            Button(action: { showMenu.toggle() }) {
-                HStack(spacing: 4) {
-                    Text(currentProjectName ?? "Select Project")
-                        .font(.system(size: 14, weight: .semibold))
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(
-                    Capsule(style: .continuous)
-                        .fill(Color.primary.opacity(hovered ? 0.12 : 0))
-                )
-            }
-            .buttonStyle(.plain)
-            .onHover { hovered = $0 }
-            .popover(isPresented: $showMenu, arrowEdge: .bottom) {
-                WorkspaceMenuContent(
-                    currentWorkspace: appModel.workspaceURL,
-                    recentWorkspaces: appModel.recentWorkspaces,
-                    openFolder: {
-                        showMenu = false
-                        DispatchQueue.main.async {
-                            appModel.presentWorkspacePicker()
-                        }
-                    },
-                    openWorkspace: { url in
-                        showMenu = false
-                        DispatchQueue.main.async {
-                            appModel.openRecentWorkspace(url)
-                        }
-                    }
-                )
-                .frame(width: 320)
-                .padding(.vertical, 8)
-            }
-        }
-    }
-
-    private struct WorkspaceMenuContent: View {
-        let currentWorkspace: URL?
-        let recentWorkspaces: [URL]
-        let openFolder: () -> Void
-        let openWorkspace: (URL) -> Void
-
-        var body: some View {
-            VStack(alignment: .leading, spacing: 12) {
-                Button(action: openFolder) {
-                    Label("Open Folder…", systemImage: "folder")
-                        .font(.system(size: 13, weight: .semibold))
-                }
-                .buttonStyle(.plain)
-
-                if let currentWorkspace {
-                    SectionHeader("Open Project")
-                    Button {
-                        openWorkspace(currentWorkspace)
-                    } label: {
-                        WorkspaceMenuRow(name: currentWorkspace.lastPathComponent, path: currentWorkspace.path)
-                    }
-                    .buttonStyle(.plain)
+            Menu {
+                Button("Open Folder…") {
+                    appModel.presentWorkspacePicker()
                 }
 
-                if !recentWorkspaces.isEmpty {
-                    SectionHeader("Recent Projects")
-                    VStack(alignment: .leading, spacing: 8) {
-                        ForEach(recentWorkspaces, id: \.self) { url in
-                            Button {
-                                openWorkspace(url)
-                            } label: {
-                                WorkspaceMenuRow(name: url.lastPathComponent, path: url.path)
+                if !appModel.recentWorkspaces.isEmpty {
+                    Section("Recent Projects") {
+                        ForEach(appModel.recentWorkspaces, id: \.self) { url in
+                            Button(url.lastPathComponent) {
+                                appModel.openRecentWorkspace(url)
                             }
-                            .buttonStyle(.plain)
                         }
                     }
+
+                    Divider()
+
+                    Button("Clear Recents") {
+                        appModel.clearRecentWorkspaces()
+                    }
                 }
+            } label: {
+                Label(currentProjectName ?? "Select Project", systemImage: "rectangle.on.rectangle")
             }
-            .padding(.horizontal, 16)
-        }
-    }
-
-    private struct SectionHeader: View {
-        let title: String
-
-        init(_ title: String) {
-            self.title = title
-        }
-
-        var body: some View {
-            Text(title.uppercased())
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .padding(.top, 4)
-        }
-    }
-
-    private struct WorkspaceMenuRow: View {
-        let name: String
-        let path: String
-
-        var body: some View {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(name)
-                    .font(.system(size: 13, weight: .semibold))
-                Text(path)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-            }
+            .menuStyle(.borderlessButton)
         }
     }
 
@@ -602,6 +509,9 @@ private struct PaneContainer: View {
     let pane: EditorPane
     @State private var isTabBarDropTarget = false
     @State private var hoveredSplitRegion: SplitDropRegion?
+    @State private var splitCleanupWorkItem: DispatchWorkItem?
+    @State private var allowSplitHover = true
+    @State private var hoverSuppressionWorkItem: DispatchWorkItem?
     private let paneDropTypes: [UTType] = [.plainText, .fileURL, .url]
     private var isCenterHighlightActive: Bool {
         hoveredSplitRegion == .center || isTabBarDropTarget
@@ -634,8 +544,10 @@ private struct PaneContainer: View {
                                 pane: pane,
                                 geometry: size,
                                 hoveredRegion: $hoveredSplitRegion,
+                                allowHover: $allowSplitHover,
                                 appModel: appModel,
-                                dropTypes: paneDropTypes
+                                dropTypes: paneDropTypes,
+                                suppressHover: suppressSplitHover
                             )
                         )
                 }
@@ -647,8 +559,67 @@ private struct PaneContainer: View {
                 appModel.activePaneID = pane.id
             }
         )
+        .onReceive(NotificationCenter.default.publisher(for: .tabDragSessionEnded)) { _ in
+            hoveredSplitRegion = nil
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .splitDropSessionEnded)) { _ in
+            hoveredSplitRegion = nil
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willResignActiveNotification)) { _ in
+            hoveredSplitRegion = nil
+            isTabBarDropTarget = false
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            hoveredSplitRegion = nil
+            isTabBarDropTarget = false
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            hoveredSplitRegion = nil
+            isTabBarDropTarget = false
+        }
+        .onDisappear {
+            hoveredSplitRegion = nil
+            isTabBarDropTarget = false
+            cancelSplitCleanup()
+            cancelHoverSuppression()
+        }
+        .onChange(of: hoveredSplitRegion) { _ in
+            scheduleSplitCleanup()
+        }
+    }
+}
+
+private extension PaneContainer {
+    func scheduleSplitCleanup() {
+        cancelSplitCleanup()
+        let workItem = DispatchWorkItem {
+            hoveredSplitRegion = nil
+        }
+        splitCleanupWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: workItem)
     }
 
+    func cancelSplitCleanup() {
+        splitCleanupWorkItem?.cancel()
+        splitCleanupWorkItem = nil
+    }
+
+    func suppressSplitHover() {
+        cancelHoverSuppression()
+        allowSplitHover = false
+        hoveredSplitRegion = nil
+        let workItem = DispatchWorkItem {
+            allowSplitHover = true
+        }
+        hoverSuppressionWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: workItem)
+    }
+
+    func cancelHoverSuppression() {
+        hoverSuppressionWorkItem?.cancel()
+        hoverSuppressionWorkItem = nil
+        allowSplitHover = true
+    }
 }
 
 private struct PaneResizeHandle: View {
@@ -697,7 +668,11 @@ private struct PaneResizeHandle: View {
     }
 }
 
-private enum SplitDropRegion {
+extension Notification.Name {
+    static let splitDropSessionEnded = Notification.Name("ZeroIDESplitDropSessionEnded")
+}
+
+private enum SplitDropRegion: Equatable {
     case left, center, right
 }
 
@@ -731,16 +706,18 @@ private struct SplitDropOverlay: View {
                     .fill(Color.ideAccent.opacity(0.1))
             )
             .frame(width: width, height: height)
-            .animation(.easeInOut(duration: 0.2), value: region)
     }
 }
 
+@MainActor
 private struct PaneSplitDropDelegate: DropDelegate {
     let pane: EditorPane
     let geometry: CGSize
     @Binding var hoveredRegion: SplitDropRegion?
+    @Binding var allowHover: Bool
     let appModel: AppModel
     let dropTypes: [UTType]
+    let suppressHover: () -> Void
 
     func validateDrop(info: DropInfo) -> Bool {
         !info.itemProviders(for: dropTypes).isEmpty
@@ -756,17 +733,26 @@ private struct PaneSplitDropDelegate: DropDelegate {
     }
 
     func dropExited(info: DropInfo) {
-        DispatchQueue.main.async {
-            hoveredRegion = nil
-        }
+        hoveredRegion = nil
+        allowHover = false
+        suppressHover()
+        NotificationCenter.default.post(name: .splitDropSessionEnded, object: nil)
+    }
+
+    func dropEnded(info: DropInfo) {
+        hoveredRegion = nil
+        allowHover = false
+        suppressHover()
+        NotificationCenter.default.post(name: .splitDropSessionEnded, object: nil)
     }
 
     func performDrop(info: DropInfo) -> Bool {
         let providers = info.itemProviders(for: dropTypes)
-        let region = region(for: info.location)
-        DispatchQueue.main.async {
-            hoveredRegion = nil
-        }
+        let region = region(for: info.location, geometry: geometry)
+        hoveredRegion = nil
+        allowHover = false
+        suppressHover()
+        NotificationCenter.default.post(name: .splitDropSessionEnded, object: nil)
         guard !providers.isEmpty else { return false }
         switch region {
         case .left:
@@ -778,7 +764,7 @@ private struct PaneSplitDropDelegate: DropDelegate {
         }
     }
 
-    private func region(for location: CGPoint) -> SplitDropRegion {
+    static func region(for location: CGPoint, geometry: CGSize) -> SplitDropRegion {
         let width = max(geometry.width, 1)
         let normalizedX = min(max(location.x, 0), width)
         let fraction = normalizedX / width
@@ -792,10 +778,9 @@ private struct PaneSplitDropDelegate: DropDelegate {
     }
 
     private func updateHover(with info: DropInfo) {
-        let region = region(for: info.location)
-        DispatchQueue.main.async {
-            hoveredRegion = region
-        }
+        guard allowHover else { return }
+        let region = Self.region(for: info.location, geometry: geometry)
+        hoveredRegion = region
     }
 }
 

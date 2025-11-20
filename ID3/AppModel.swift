@@ -510,7 +510,7 @@ final class AppModel: NSObject, ObservableObject {
         openFile(at: node.url)
     }
 
-    func openFile(at url: URL, inPane paneID: EditorPane.ID? = nil) {
+    func openFile(at url: URL, inPane paneID: EditorPane.ID? = nil, insertAt insertIndex: Int? = nil) {
         ensureActivePane()
 
         if let paneID, panes.firstIndex(where: { $0.id == paneID }) != nil {
@@ -528,7 +528,10 @@ final class AppModel: NSObject, ObservableObject {
                 state = .ready
             }
         } else {
-            panes[paneIndex].tabs.append(prospectiveTab)
+            let insertion = insertIndex
+                .map { min(max($0, 0), panes[paneIndex].tabs.count) }
+                ?? panes[paneIndex].tabs.count
+            panes[paneIndex].tabs.insert(prospectiveTab, at: insertion)
             panes[paneIndex].activeTabID = prospectiveTab.id
             loadFileContents(for: prospectiveTab, from: url)
         }

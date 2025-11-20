@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import AppKit
 
 struct IDEWindowToolbar: View {
     @EnvironmentObject private var appModel: AppModel
@@ -23,6 +24,8 @@ struct EditorTabBar: View {
     @State private var isDropTarget = false
     @State private var isTabDragActive = false
     @State private var dragHoverCount = 0
+    @State private var dragResetToken = UUID()
+    @State private var dragCleanupWorkItem: DispatchWorkItem?
     private let overflowThreshold: CGFloat = 280
 
     var body: some View {
@@ -38,6 +41,7 @@ struct EditorTabBar: View {
                                 appModel.moveTab(withIdentifier: identifier, toIndex: idx, in: pane)
                             }
                         },
+                        dragEnded: endTabDragSession,
                         isDragActive: $isTabDragActive,
                         dragStateChanged: handleTabDragHoverChange
                     )
@@ -57,6 +61,7 @@ struct EditorTabBar: View {
                                 appModel.moveTab(withIdentifier: id, toIndex: idx, in: pane)
                             }
                         },
+                        dragEnded: endTabDragSession,
                         isDragActive: $isTabDragActive,
                         dragStateChanged: handleTabDragHoverChange
                     )
@@ -65,6 +70,8 @@ struct EditorTabBar: View {
                             pane: pane,
                             tabIndex: idx,
                             estimatedWidth: tabWidths[tab.id] ?? averageTabWidth,
+                            resetToken: dragResetToken,
+                            dragEnded: endTabDragSession,
                             isDragActive: $isTabDragActive,
                             dragStateChanged: handleTabDragHoverChange,
                             moveAction: { identifier, insertIndex, pane in
@@ -92,6 +99,7 @@ struct EditorTabBar: View {
                                     appModel.moveTab(withIdentifier: identifier, toIndex: insertIndex, in: pane)
                                 }
                             },
+                            dragEnded: endTabDragSession,
                             isDragActive: $isTabDragActive,
                             dragStateChanged: handleTabDragHoverChange
                         )
@@ -144,12 +152,26 @@ struct EditorTabBar: View {
         .padding(.vertical, 2)
         .background(Color.ideBackground)
         .onDrop(of: [UTType.plainText, .fileURL, .url], isTargeted: $isDropTarget) { providers in
-            appModel.handleDrop(providers, into: pane)
+            defer { endTabDragSession() }
+            return appModel.handleDrop(providers, into: pane)
         }
         .onChange(of: isDropTarget) { value in
             onTargetChange(value)
         }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willResignActiveNotification)) { _ in
+            endTabDragSession()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
+            endTabDragSession()
+        }
+        .onDisappear {
+            endTabDragSession()
+        }
     }
+}
+
+extension Notification.Name {
+    static let tabDragSessionEnded = Notification.Name("ZeroIDETabDragSessionEnded")
 }
 
 private extension EditorTabBar {
@@ -169,9 +191,21 @@ private extension EditorTabBar {
 
     private func handleTabDragHoverChange(_ isActive: Bool) {
         dragHoverCount = max(0, dragHoverCount + (isActive ? 1 : -1))
-        let active = dragHoverCount > 0
+        updateDragState(active: dragHoverCount > 0)
+    }
+
+    private func endTabDragSession() {
+        dragHoverCount = 0
+        updateDragState(active: false)
+    }
+
+    private func updateDragState(active: Bool) {
         if active != isTabDragActive {
             isTabDragActive = active
+            dragResetToken = UUID()
+            if !active {
+                NotificationCenter.default.post(name: .tabDragSessionEnded, object: nil)
+            }
         }
     }
 }
@@ -184,10 +218,12 @@ private struct TabBarAvailableWidthKey: PreferenceKey {
 }
 
 private struct TabInsertTarget: View {
+    @EnvironmentObject private var appModel: AppModel
     let index: Int
     let pane: EditorPane
     let width: CGFloat
     let onDrop: (String, Int, EditorPane) -> Void
+    let dragEnded: () -> Void
     @Binding var isDragActive: Bool
     let dragStateChanged: (Bool) -> Void
     @State private var isTargeted = false
@@ -211,22 +247,50 @@ private struct TabInsertTarget: View {
         .animation(.easeInOut(duration: 0.15), value: isTargeted)
         .animation(.easeInOut(duration: 0.15), value: isDragActive)
         .contentShape(Rectangle())
-        .onDrop(of: [.plainText], isTargeted: $isTargeted) { providers in
-            guard let provider = providers.first(where: { $0.canLoadObject(ofClass: NSString.self) }) else {
-                return false
-            }
-            provider.loadObject(ofClass: NSString.self) { object, _ in
-                guard let nsString = object as? NSString else { return }
-                let identifier = nsString as String
-                DispatchQueue.main.async {
-                    onDrop(identifier, index, pane)
-                    }
-            }
-            return true
+        .onDrop(of: [.plainText, .fileURL, .url], isTargeted: $isTargeted) { providers in
+            if handleTabReorder(providers) { return true }
+            if handleFileDrop(providers) { return true }
+            return false
         }
         .onChange(of: isTargeted) { active in
             dragStateChanged(active)
         }
+        .onDisappear {
+            if isTargeted {
+                dragStateChanged(false)
+            }
+        }
+    }
+
+    private func handleTabReorder(_ providers: [NSItemProvider]) -> Bool {
+        guard let provider = providers.first(where: { $0.canLoadObject(ofClass: NSString.self) }) else {
+            return false
+        }
+        provider.loadObject(ofClass: NSString.self) { object, _ in
+            guard let nsString = object as? NSString else { return }
+            let identifier = nsString as String
+            DispatchQueue.main.async {
+                onDrop(identifier, index, pane)
+                dragEnded()
+            }
+        }
+        return true
+    }
+
+    private func handleFileDrop(_ providers: [NSItemProvider]) -> Bool {
+        guard let provider = providers.first(where: {
+            $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+            || $0.hasItemConformingToTypeIdentifier(UTType.url.identifier)
+        }) else { return false }
+
+        provider.loadObject(ofClass: NSURL.self) { object, _ in
+            guard let nsURL = object as? NSURL, let url = nsURL as URL? else { return }
+            DispatchQueue.main.async {
+                appModel.openFile(at: url, inPane: pane.id, insertAt: index)
+                dragEnded()
+            }
+        }
+        return true
     }
 }
 
@@ -243,9 +307,12 @@ private enum TabHoverSide {
 }
 
 private struct TabDropWrapper<Content: View>: View {
+    @EnvironmentObject private var appModel: AppModel
     let pane: EditorPane
     let tabIndex: Int
     let estimatedWidth: CGFloat
+    let resetToken: UUID
+    let dragEnded: () -> Void
     @Binding var isDragActive: Bool
     let dragStateChanged: (Bool) -> Void
     let moveAction: (String, Int, EditorPane) -> Void
@@ -257,6 +324,8 @@ private struct TabDropWrapper<Content: View>: View {
         pane: EditorPane,
         tabIndex: Int,
         estimatedWidth: CGFloat,
+        resetToken: UUID,
+        dragEnded: @escaping () -> Void,
         isDragActive: Binding<Bool>,
         dragStateChanged: @escaping (Bool) -> Void,
         moveAction: @escaping (String, Int, EditorPane) -> Void,
@@ -265,6 +334,8 @@ private struct TabDropWrapper<Content: View>: View {
         self.pane = pane
         self.tabIndex = tabIndex
         self.estimatedWidth = estimatedWidth
+        self.resetToken = resetToken
+        self.dragEnded = dragEnded
         self._isDragActive = isDragActive
         self.dragStateChanged = dragStateChanged
         self.moveAction = moveAction
@@ -274,7 +345,7 @@ private struct TabDropWrapper<Content: View>: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            if hoverSide == .left {
+            if isDragActive, hoverSide == .left {
                 TabPlaceholderGhost()
                     .frame(width: placeholderWidth, height: 32)
             }
@@ -288,24 +359,41 @@ private struct TabDropWrapper<Content: View>: View {
                     }
                 )
 
-            if hoverSide == .right {
+            if isDragActive, hoverSide == .right {
                 TabPlaceholderGhost()
                     .frame(width: placeholderWidth, height: 32)
             }
         }
         .animation(.easeInOut(duration: 0.15), value: hoverSide != nil)
         .onDrop(
-            of: [.plainText],
+            of: [.plainText, .fileURL, .url],
             delegate: TabHoverDropDelegate(
                 pane: pane,
                 tabIndex: tabIndex,
                 tabWidth: max(viewWidth, 1),
+                dragEnded: dragEnded,
                 hoverSide: $hoverSide,
-                moveAction: moveAction
+                moveAction: moveAction,
+                fileDropHandler: { url, insertionIndex in
+                    appModel.openFile(at: url, inPane: pane.id, insertAt: insertionIndex)
+                }
             )
         )
         .onChange(of: hoverSide != nil) { isHovering in
             dragStateChanged(isHovering)
+        }
+        .onChange(of: isDragActive) { active in
+            if !active {
+                hoverSide = nil
+            }
+        }
+        .onChange(of: resetToken) { _ in
+            hoverSide = nil
+        }
+        .onDisappear {
+            if hoverSide != nil {
+                dragStateChanged(false)
+            }
         }
     }
 
@@ -315,15 +403,18 @@ private struct TabDropWrapper<Content: View>: View {
     }
 }
 
+@MainActor
 private struct TabHoverDropDelegate: DropDelegate {
     let pane: EditorPane
     let tabIndex: Int
     let tabWidth: CGFloat
+    let dragEnded: () -> Void
     @Binding var hoverSide: TabHoverSide?
     let moveAction: (String, Int, EditorPane) -> Void
+    let fileDropHandler: (URL, Int) -> Void
 
     func validateDrop(info: DropInfo) -> Bool {
-        info.hasItemsConforming(to: [.plainText])
+        info.hasItemsConforming(to: [.plainText]) || info.hasItemsConforming(to: [.fileURL, .url])
     }
 
     func dropEntered(info: DropInfo) {
@@ -336,28 +427,42 @@ private struct TabHoverDropDelegate: DropDelegate {
     }
 
     func dropExited(info: DropInfo) {
-        DispatchQueue.main.async {
-            hoverSide = nil
-        }
+        hoverSide = nil
+    }
+
+    func dropEnded(info: DropInfo) {
+        hoverSide = nil
+        dragEnded()
     }
 
     func performDrop(info: DropInfo) -> Bool {
         let side = determineSide(for: info)
-        DispatchQueue.main.async {
-            hoverSide = nil
-        }
-        guard let provider = info.itemProviders(for: [.plainText]).first else {
-            return false
-        }
-        provider.loadObject(ofClass: NSString.self) { object, _ in
-            guard let nsString = object as? NSString else { return }
-            let identifier = nsString as String
-            DispatchQueue.main.async {
-                let insertionIndex = side == .left ? tabIndex : tabIndex + 1
-                moveAction(identifier, insertionIndex, pane)
+        hoverSide = nil
+        let insertionIndex = side == .left ? tabIndex : tabIndex + 1
+
+        if let provider = info.itemProviders(for: [.plainText]).first {
+            provider.loadObject(ofClass: NSString.self) { object, _ in
+                guard let nsString = object as? NSString else { return }
+                let identifier = nsString as String
+                DispatchQueue.main.async {
+                    moveAction(identifier, insertionIndex, pane)
+                    dragEnded()
+                }
             }
+            return true
         }
-        return true
+
+        if let provider = info.itemProviders(for: [.fileURL, .url]).first {
+            provider.loadObject(ofClass: NSURL.self) { object, _ in
+                guard let nsURL = object as? NSURL, let url = nsURL as URL? else { return }
+                DispatchQueue.main.async {
+                    fileDropHandler(url, insertionIndex)
+                }
+            }
+            return true
+        }
+
+        return false
     }
 
     private func determineSide(for info: DropInfo) -> TabHoverSide {
@@ -367,9 +472,7 @@ private struct TabHoverDropDelegate: DropDelegate {
 
     private func updateHoverSide(for info: DropInfo) {
         let side = determineSide(for: info)
-        DispatchQueue.main.async {
-            hoverSide = side
-        }
+        hoverSide = side
     }
 }
 
@@ -433,6 +536,7 @@ private extension Collection where Element == CGFloat {
 
 private struct EditorTabChip: View {
     @EnvironmentObject private var appModel: AppModel
+    @Environment(\.colorScheme) private var colorScheme
     let tab: EditorTab
     let isActive: Bool
     let closeAction: () -> Void
@@ -459,8 +563,15 @@ private struct EditorTabChip: View {
         .padding(.leading, 12)
         .padding(.trailing, 6)
         .padding(.vertical, 6)
-        .background(backgroundColor)
-        .cornerRadius(8)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(backgroundColor)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(isActive ? Color.accentColor.opacity(colorScheme == .dark ? 0.6 : 0.4) : Color.clear,
+                                lineWidth: 1)
+                )
+        )
         .background(
             GeometryReader { proxy in
                 Color.clear.preference(
@@ -494,12 +605,12 @@ private struct EditorTabChip: View {
 
     private var backgroundColor: Color {
         if isActive {
-            return Color.ideEditorBackground
-        } else if isHovering {
-            return Color.ideEditorBackground.opacity(0.35)
-        } else {
-            return Color.clear
+            return Color.accentColor.opacity(colorScheme == .dark ? 0.35 : 0.2)
         }
+        if isHovering {
+            return Color.primary.opacity(0.08)
+        }
+        return Color.clear
     }
 }
 
